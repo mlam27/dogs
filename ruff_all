@@ -1,0 +1,213 @@
+import pandas as pd
+from pathlib import Path
+from gtf import gtf_to_bed
+import glob
+import os 
+
+# Path to both negative and positive splice junction bed files
+files = glob.glob('/Volumes/de_novo/RNA/Mutu_Zta/splicing/*')
+
+# Minimum number of splice junction counts required
+min_counts = 10
+
+# Where you keep this script (and associated files)
+homedir = Path("/Users/nate/Documents/Projects/Meggie/")
+
+scriptdir = homedir / "ruff"
+annotationdir = scriptdir / "annotations"
+gtf_path = annotationdir / 'gencode.v41.annotation.gtf'
+bed_path = gtf_path.parent / (gtf_path.stem + '.bed')
+
+# The script converts GTF to bed unless that has already been done by previously running this script
+if bed_path.exists():
+    genes = pd.read_table(bed_path)
+else:
+    genes = gtf_to_bed(gtf_path, feature='gene')
+
+
+
+def find_position(arr, val):
+    '''Finds the position of a junction in an array of coordinates. Must be a sorted array'''
+
+    lower_bound = 0
+    upper_bound = len(arr)
+    while lower_bound < upper_bound:
+        middle = (lower_bound + upper_bound) // 2
+        if val >= arr[middle]:
+            lower_bound = middle + 1
+        else:
+            upper_bound = middle
+    return lower_bound - 1
+
+
+def get_dog_positive(junctions, genes, chromosome):
+    '''Output positive strand DoGs'''
+
+    dog_genes = []
+    genes = genes[(genes["chromosome"] == chromosome) & (genes["strand"] == '+')].sort_values('left')
+    junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= min_counts)]
+    genes.index = range(len(genes.index))
+
+    gene_starts = list(genes['left'])
+    for sj in junctions.index:
+        sj_start = junctions.loc[sj, 1]
+        sj_end = junctions.loc[sj, 2]
+
+        index_start = find_position(gene_starts, sj_start)
+        for gene in genes.index[index_start:]:
+            gene_start = genes.loc[gene, "left"]
+            gene_end = genes.loc[gene, "right"]
+            if gene_start <= sj_start <= gene_end:
+                if sj_end > gene_end:
+                    dog_genes.append(pd.concat([genes.loc[gene], junctions.loc[sj]]))
+            elif gene_start > sj_end:
+                break
+
+    return pd.DataFrame(dog_genes)
+
+
+def get_dog_negative(junctions, genes, chromosome):
+
+    '''Output negative strand DoGs'''
+    dog_genes = []
+    genes = genes[(genes["chromosome"] == chromosome) & (genes["strand"] == '-')].sort_values('right')
+    junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= min_counts)]
+    genes.index = range(len(genes.index))
+
+    gene_starts = list(genes['right'])
+    for sj in junctions.index:
+        sj_start = junctions.loc[sj, 1]
+        sj_end = junctions.loc[sj, 2]
+
+        # Double check this..finds the first position then moves back a few rows and cycles through.
+        index_start = find_position(gene_starts, sj_end) + 5
+        
+        # Cycle through rows backwards
+        for gene in genes.index[index_start:0:-1]:
+            gene_start = genes.loc[gene, "left"]
+            gene_end = genes.loc[gene, "right"]
+            if gene_start <= sj_end <= gene_end:
+                if sj_start < gene_start:
+                    dog_genes.append(pd.concat([genes.loc[gene], junctions.loc[sj]]))
+            elif gene_end < sj_start:
+                break
+
+    return pd.DataFrame(dog_genes)
+
+
+# This is designed to work only for human samples so far - just forms a list of chromosomes
+chromosomes = ['chr' + str(i) for i in range(22)] + ['X','Y']
+
+# SJ bed file names must have the word "negative" or "positive" in them to distinguish strand. i.e. 'MZ.positive_strand.bed'
+for sj_bedfile in files:
+    if 'negative' in sj_bedfile:
+        negsj_path = Path(sj_bedfile)
+        sjs_neg = pd.read_table(negsj_path, comment='#', header=None)
+        neg = pd.concat([get_dog_negative(sjs_neg, genes, chromosome) for chromosome in chromosomes])
+        neg[3] = neg['name']
+        negpath_out = negsj_path.parent / (negsj_path.stem + '.dogs_only.bed')
+        with open(negpath_out, 'w') as outfile:
+            outfile.write("#track name=junctions negative_strand\n")
+            neg.iloc[:, 6:].to_csv(outfile, sep='\t', header=None, index=None)
+
+    elif 'positive' in sj_bedfile:
+        possj_path = Path(sj_bedfile)
+        sjs = pd.read_table(possj_path, comment='#', header=None)
+        pos = pd.concat([get_dog_positive(sjs, genes, chromosome) for chromosome in chromosomes])
+        pos[3] = pos['name']
+        pospath_out = possj_path.parent / (possj_path.stem + '.dogs_only.bed')
+        with open(pospath_out, 'w') as outfile:
+            outfile.write("#track name=junctions positive_strand\n")
+            column_labels = ['1', '2', '3', '4', '5', '6']
+            outfile.write('\t'.join(column_labels) + '\n')
+            pos.iloc[:, 6:].to_csv(outfile, sep='\t', header=None, index=None)
+
+#to normalize
+# Define folder path where files are located
+folder_path = "/Users/meggielam/Desktop/practice/DG75_BRRF1_vs_cntl/"
+
+# List all file paths in the folder
+file_paths = glob.glob(os.path.join(folder_path, "*.bed"))
+
+# Make empty dictionary to store the sums
+sums = {}
+
+# Loop through each file
+for file_path in file_paths:
+    file_name = os.path.splitext(os.path.basename(file_path))[0]
+    
+    # Check if the file is not dog
+    if "dogs_only" not in file_name:
+        # Read the sum file and calculate the sum of column 4
+        x = pd.read_csv(file_path, header=None, sep="\t", skiprows=1)
+        column_4_sum = x[4].sum()
+        
+        sums[file_name] = column_4_sum
+
+# Loop through each file again for normalization
+for file_path in file_paths:
+    file_name = os.path.splitext(os.path.basename(file_path))[0]
+    
+    # Check if the file is a dogs_only file
+    if "dogs_only" in file_name:
+        sum_file_name = file_name.replace(".dogs_only", "")
+        
+        # Read the dogs_only file
+        y = pd.read_csv(file_path, header=None, sep="\t", skiprows=1)
+        
+        # Divide column 4 of the dogs_only file by the corresponding sum
+        result_norm_dog = (y[4] / sums[sum_file_name]) * 100000000
+        
+        # Update column 4 in the dogs_only file with the normalized values
+        y[4] = result_norm_dog
+        
+        # make new file for results
+        output_file = os.path.join(folder_path, f"{file_name}_normalized.bed")
+        y.to_csv(output_file, header=False, index=False, sep="\t")
+        
+        print(f"Normalized file exported to: {output_file}")
+
+#fold change
+#folder_path = "/Users/meggielam/Desktop/practice/DG75_BRRF1_vs_cntl/"
+folder_path ="/Users/meggielam/Desktop/practice/norm/"
+file_paths = glob.glob(os.path.join(folder_path, "*normalized.bed"))
+
+normalized_files = [name for name in file_paths if "normalized" in name]
+
+output_list = []
+#new = pd.DataFrame
+
+# Loop to concatenate columns 0, 1, and 2
+for file_path in file_paths:
+    data = pd.read_csv(file_path, header=None, sep="\t", usecols=[0, 1, 2])
+    data.index = data[0].astype(str) + ":" + data[1].astype(str) + ":" + data[2].astype(str)
+    output_list.extend(data.index.tolist())
+
+# Remove the repeating values from the output list
+output_list = pd.Series(output_list).drop_duplicates().tolist()
+
+new = pd.DataFrame(index=output_list)
+# Loop to match read counts (column 4) to corresponding splice junctions
+for file_path in file_paths:
+    data_4 = pd.read_csv(file_path, header=None, sep="\t")
+    data_4.index =data_4[0].astype(str) + ":" + data_4[1].astype(str) + ":" + data_4[2].astype(str)
+    data_4 = data_4.reset_index().drop_duplicates('index').set_index('index')
+    new[file_path.split("/")[-1]] = data_4[4]
+
+    #output_list.extend(new.tolist())
+
+
+new=new.fillna(0)
+
+new = new[list(reversed(sorted(new.columns)))]
+new += 1
+new["cntl_mean"] = new[[i for i in new.columns if i[0] == 'c']].mean(1)
+new["brrf_mean"] = new[[i for i in new.columns if i[0] != 'c']].mean(1)
+new['fold_change'] = new['brrf_mean'] / new['cntl_mean']
+
+# Define the output file path
+output_file = os.path.join(folder_path, "normalized_data_juncs.txt")
+new.to_csv(output_file, sep='\t')
+
+print("done!", output_file)
+
