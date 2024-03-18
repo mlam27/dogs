@@ -3,6 +3,7 @@ from pathlib import Path
 from gtf import gtf_to_bed
 import glob
 import os 
+import numpy as np
 
 # Path to both negative and positive splice junction bed files
 files = glob.glob('/Volumes/de_novo/RNA/Mutu_Zta/splicing/*')
@@ -194,20 +195,44 @@ for file_path in file_paths:
     data_4 = data_4.reset_index().drop_duplicates('index').set_index('index')
     new[file_path.split("/")[-1]] = data_4[4]
 
-    #output_list.extend(new.tolist())
 
-
-new=new.fillna(0)
-
-new = new[list(reversed(sorted(new.columns)))]
+new = new.fillna(1)
 new += 1
-new["cntl_mean"] = new[[i for i in new.columns if i[0] == 'c']].mean(1)
-new["brrf_mean"] = new[[i for i in new.columns if i[0] != 'c']].mean(1)
-new['fold_change'] = new['brrf_mean'] / new['cntl_mean']
 
-# Define the output file path
-output_file = os.path.join(folder_path, "normalized_data_juncs.txt")
+output_file = os.path.join(folder_path, "fold_change_juncs.txt")
 new.to_csv(output_file, sep='\t')
-
 print("done!", output_file)
+
+#do in excel for now
+new["cntl_mean"] = new[[i for i in new.columns if i[0] == 'c']].mean(1)
+new["zta_mean"] = new[[i for i in new.columns if i[0] != 'c']].mean(1)
+new['fold_change'] = new['zta_mean'] / new['cntl_mean']
+
+#cleaning up the tsv file 
+new = new.fillna(0)
+new.columns
+new.index
+pos = new[[i for i in new.columns if 'positive' in i]]
+pos[np.sum(pos,1)>0]
+pos.columns
+pos.columns = [i.split('.')[0] for i in pos.columns]
+pos=pos.drop('1:2:3')
+pos=pos[sorted(pos.columns)]
+pos[['MCTH1', 'MCTH2','MCTH3', 'MOSTH1', 'MOSTH2', 'MOSTH3']]
+mcth = pos[['MCTH1', 'MCTH2','MCTH3', 'MOSTH1', 'MOSTH2', 'MOSTH3']]
+ mcth['os_over_c'] = np.mean(mcth[mcth.columns[:3]],1) / np.mean(mcth[mcth.columns[3:6]],1)
+ mcth['os_over_c'] = np.mean(mcth[mcth.columns[3:6]],1)/ np.mean(mcth[mcth.columns[:3]],1)
+ mcth+=.01
+ mcth = mcth.sort_values('os_over_c')
+ l=[]
+ for i in mcth.index:
+    ...:     ll, r = i.rsplit(':',1)
+    ...:     l.append(f'{ll}-{r}')
+    ...: 
+mcth.index=l
+mcth.to_csv('MCTH_v_MOSTH.dogs.tsv',sep='\t')
+!open MCTH_v_MOSTH.dogs.tsv
+!open .
+
+
 
