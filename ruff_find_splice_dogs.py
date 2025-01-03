@@ -11,7 +11,7 @@ min_counts = 10
 min_bases = 100
 
 
-# Where you keep this script (and associated files)
+### Where you keep this script (and associated files) ###
 homedir = Path("/Users/meggielam/Desktop/ruff_2024")
 
 scriptdir = homedir / "ruff_2024"
@@ -20,16 +20,16 @@ gtf_path = annotationdir / 'gencode.v41.annotation.gtf'
 #gtf_path = annotationdir / 'hg38gencode.v42_plus_Akata_inverted.gtf'
 bed_path = gtf_path.parent / (gtf_path.stem + '.bed')
 
-# The script converts GTF to bed unless that has already been done by previously running this script
-if bed_path.exists():
+### The script converts GTF to bed unless that has already been done by previously running this script ###
+if bed_path.exists(): #If bed file exists, read in the bed file using pandas library (pd=pandas)and place it in a dataframe called "genes"#
     genes = pd.read_table(bed_path)
-else:
+else: #if bed file isn't there, convert the gtf to bed and loop back to 'if' statement#
     genes = gtf_to_bed(gtf_path, feature='transcript')
 
-#sort gene coordinates based off start from low to high
+### Sort gene coordinates based off start from low to high ###
 genes = genes.sort_values(by=['left'], ascending=True).reset_index(drop=True)
 
-######take most left and most right value for each gene#########
+### Take most left and most right value for each gene ###
 #If gene has isoforms, take min 'left' value and max 'right' value and make 1 row with that gene and those coordinates only
 grouped_genes = genes.groupby('name').agg({
     'chromosome': 'first',   # Keep the first occurrence (assuming it's the same for all rows of the same name)
@@ -42,10 +42,11 @@ grouped_genes = genes.groupby('name').agg({
 print(grouped_genes) #check list and compare to 'genes'
 genes = grouped_genes #update 'genes' list without isoforms 
 
-#sort gene coordinates based off start from low to high before removing embedded genes
+#Resort gene coordinates based off start position from low to high before removing embedded genes
 genes = genes.sort_values(by=['left'], ascending=True).reset_index(drop=True)
 
-#######remove embedded genes(positive strand)#######
+
+###Remove embedded genes(Both strands)###
 def update_gene_range(current_gene):
     return current_gene['left'], current_gene['right'] 
 
@@ -59,13 +60,13 @@ genes.append(genes.iloc[0])
 i = 0
 while i < len(genes):
     current_gene = genes.iloc[i]
-    if current_gene['strand'] == '+':
+    if current_gene['strand'] == '+': #For positive strand#
         if (current_gene['left'] >= gene_left and current_gene['right'] <= gene_right and current_gene['chromosome'] == reference_chromosome):
             print("Condition met for '+': Adding to embedded_genes and updating 'genes'")
             embedded_genes.append(current_gene)
             genes = genes.drop(genes.index[i]).reset_index(drop=True)
             continue
-    elif current_gene['strand'] == '-':
+    elif current_gene['strand'] == '-': #For negative strand#
         if (current_gene['left'] <= gene_left and current_gene['right'] >= gene_right and current_gene['chromosome'] == reference_chromosome):
             print("Condition met for '-': Adding to embedded_genes and updating 'genes'")
             embedded_genes.append(current_gene)
@@ -82,28 +83,34 @@ embedded_genes_df = pd.DataFrame(embedded_genes)
 print("embedded_genes:")
 print(embedded_genes_df)
 
+
+### The point of this 'def' function is to make the entire script faster so the loop does not have to go through every line in the annotation file ###
+### This function will break the annotation file into sections - lower, middle, and upper - ###
+### If the splice junction from the bed file is not in the lower_bound, then it will change the conditions of the lower_bound to continue the loop ###
 def find_position(arr, val):
     '''Finds the position of a junction in an array of coordinates. Must be a sorted array'''
 
     lower_bound = 0
     upper_bound = len(arr)
     while lower_bound < upper_bound:
-        middle = (lower_bound + upper_bound) // 2
-        if val >= arr[middle]:
+        middle = (lower_bound + upper_bound) // 2 #defines middle section; '//2' = rounds down to nearest whole number#
+        if val >= arr[middle]: #Looks for splice junction in middle section of annotation file, if splice junction is not within that section, update boundaries and continue search#
             lower_bound = middle + 1
         else:
             upper_bound = middle
-    return lower_bound - 1
+    return lower_bound - 1 #If the lower_bound is no longer < upper_bound, then go start over with new boundaries#
 
+### This 'def' function will grab splice dogs from positive strand bed file ###
 def get_dog_positive(junctions, genes, chromosome):
     '''Output positive strand DoGs'''
- 
-    dog_genes = []
-    genes = genes[(genes["chromosome"] == chromosome) & (genes["strand"] == '+')].sort_values('left')
-    junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= min_counts)] #column 4 has the counts
+    ## Go through bed file and grab splice junctions from positive strands ##
+    dog_genes = [] #Empty dataFrame for dog genes to go in
+    genes = genes[(genes["chromosome"] == chromosome) & (genes["strand"] == '+')].sort_values('left') #Grabs columns "chromosome", "strand", and sorts the genes based off start position#
+    junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= min_counts)] #column 4 has the counts; Grabs junctions that are >=min count (min count = 0)#
     genes.index = range(len(genes.index))
-
-    gene_starts = list(genes['left'])
+## Loop through 'genes' to identify splice dogs based on boundries that are set ##
+    gene_starts = list(genes['left']) #Take 'start' position of genes ##
+    ## Get start and end positions of each splice junction from bed file and call it sj_start/end ##
     for sj in junctions.index:
         sj_start = junctions.loc[sj, 1]
         sj_end = junctions.loc[sj, 2]
