@@ -39,9 +39,6 @@ grouped_genes = genes.groupby('name').agg({
     'strand': 'first'        # Keep the first occurrence (assuming it's the same for all rows of the same name)
 }).reset_index()
 
-print(grouped_genes) #check list and compare to 'genes'
-genes = grouped_genes #update 'genes' list without isoforms 
-
 #Resort gene coordinates based off start position from low to high before removing embedded genes
 genes = genes.sort_values(by=['left'], ascending=True).reset_index(drop=True)
 
@@ -51,7 +48,6 @@ def update_gene_range(current_gene):
     return current_gene['left'], current_gene['right'] 
 
 embedded_genes = []
-
 gene_left = genes.iloc[0]['left']
 gene_right = genes.iloc[0]['right']
 reference_chromosome = genes.iloc[0]['chromosome']
@@ -76,12 +72,10 @@ while i < len(genes):
     #Condition not met: Updating gene range 
     gene_left, gene_right = update_gene_range(current_gene)
     reference_chromosome = current_gene['chromosome']
-
     i += 1
 
 embedded_genes_df = pd.DataFrame(embedded_genes)
-print("embedded_genes:")
-print(embedded_genes_df)
+
 
 
 ### The point of this 'def' function is to make the entire script faster so the loop does not have to go through every line in the annotation file ###
@@ -109,20 +103,20 @@ def get_dog_positive(junctions, genes, chromosome):
     junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= min_counts)] #column 4 has the counts; Grabs junctions that are >=min count (min count = 0)#
     genes.index = range(len(genes.index))
 ## Loop through 'genes' to identify splice dogs based on boundries that are set ##
-    gene_starts = list(genes['left']) #Take 'start' position of genes ##
+    gene_lefts = list(genes['left']) #Take 'start' position of genes ##
     ## Get start and end positions of each splice junction from bed file and call it sj_start/end ##
     for sj in junctions.index:
-        sj_start = junctions.loc[sj, 1]
+        sj_left = junctions.loc[sj, 1]
         sj_end = junctions.loc[sj, 2]
 
-        index_start = find_position(gene_starts, sj_start)
-        for gene in genes.index[index_start:]:
-            gene_start = genes.loc[gene, "left"]
+        index_left = find_position(gene_lefts, sj_left)
+        for gene in genes.index[index_left:]:
+            gene_left = genes.loc[gene, "left"]
             gene_end = genes.loc[gene, "right"]
-            if gene_start <= sj_start <= gene_end:
-                if sj_end > (gene_end + min_bases):
+            if gene_left <= sj_left <= gene_end:
+                if sj_end > (gene_end + args.min_bases):
                     dog_genes.append(pd.concat([genes.loc[gene], junctions.loc[sj]]))
-            elif gene_start > sj_end:
+            elif gene_left > sj_end:
                 break
 
     return pd.DataFrame(dog_genes)
@@ -132,33 +126,36 @@ def get_dog_negative(junctions, genes, chromosome):
     '''Output negative strand DoGs'''
     dog_genes = []
     genes = genes[(genes["chromosome"] == chromosome) & (genes["strand"] == '-')].sort_values('right')
-    junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= min_counts)]
+    junctions = junctions[(junctions[0] == chromosome) & (junctions[4] >= args.min_counts)]
     genes.index = range(len(genes.index))
 
-    gene_starts = list(genes['right'])
+    gene_lefts = list(genes['right'])
     for sj in junctions.index:
-        sj_start = junctions.loc[sj, 1]
+        sj_left = junctions.loc[sj, 1]
         sj_end = junctions.loc[sj, 2]
 
         # Double check this..finds the first position then moves back a few rows and cycles through.
-        index_start = find_position(gene_starts, sj_end) + 5
+        index_left = find_position(gene_lefts, sj_end) + 5
 
         # Cycle through rows backwards
-        for gene in genes.index[index_start:0:-1]:
-            gene_start = genes.loc[gene, "left"]
+        for gene in genes.index[index_left:0:-1]:
+            gene_left = genes.loc[gene, "left"]
             gene_end = genes.loc[gene, "right"]
-            if gene_start <= sj_end <= gene_end:
-                if sj_start < (gene_start - min_bases):
+            if gene_left <= sj_end <= gene_end:
+                if sj_left < (gene_start - min_bases):
                     dog_genes.append(pd.concat([genes.loc[gene], junctions.loc[sj]]))
-            elif gene_end < sj_start:
+            elif gene_end < sj_left:
                 break
 
     return pd.DataFrame(dog_genes)
 
 
-chromosomes = ['chr' + str(i) for i in range(22)] + ['X','Y']
+chromosomes = ['chr' + str(i) for i in range(1, 23)] + ['X','Y']
+files = glob.glob(args.files)
+
 # SJ bed file names must have the word "negative" or "positive" in them to distinguish strand. i.e. 'MZ.positive_strand.bed'
 for sj_bedfile in files:
+    print(f"Processing file: {sj_bedfile}")
     if 'negative' in sj_bedfile:
         negsj_path = Path(sj_bedfile)
         sjs_neg = pd.read_table(negsj_path, comment='#', header=None)
@@ -180,7 +177,7 @@ for sj_bedfile in files:
             column_labels = ['1', '2', '3', '4', '5', '6']
             outfile.write('\t'.join(column_labels) + '\n')
             pos.iloc[:, 6:].to_csv(outfile, sep='\t', header=None, index=None)
-    print("DONE")
+    print("~~~~DONE~~~~")
 
 
 
